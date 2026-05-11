@@ -1,0 +1,22 @@
+{
+  "project": {
+    "species_code": "curlew",
+    "species_name": "Numenius arquata",
+    "common_name": "欧亚杓鹬",
+    "species_group": "medium_wader",
+    "timezone": "UTC"
+  },
+  "input": {
+    "raw_csv": "../data/raw/curlew_raw.csv",
+    "ndvi_csv": "../data/raw/CURLEW_VLAANDEREN - Eurasian curlews (Numenius arquata, Scolopacidae)NVDI.csv",
+    "climate_dir": "../data/climate"
+  },
+  "output": {
+    "base_dir": "output/species_outputs"
+  },
+  "environment": {
+    "resource_proxy": "ndvi",
+    "use_wind": true,
+    "use_temperature": true
+  }
+}

@@ -1,0 +1,8 @@
+numpy
+pandas
+xarray
+scikit-learn
+scipy
+netCDF4
+dask
+powerlaw

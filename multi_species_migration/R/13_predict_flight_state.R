@@ -21,13 +21,12 @@ ensure_project_root()
 source(file.path("R", "00_config.R"))
 
 prediction_output_paths <- function(paths) {
+  cfg <- load_cfg()
   list(
     state_prediction_csv = file.path(paths$tables_dir, "13_state_prediction.csv"),
-    prediction_context_rds = file.path(paths$models_dir, "curlew_prediction_context.rds")
+    prediction_context_rds = file.path(paths$models_dir, paste0(cfg$project$species_code, "_prediction_context.rds"))
   )
 }
-
-migration_directions <- c("global", "northbound", "southbound")
 
 safe_scale_value <- function(x, center, scale) {
   if (!is.finite(scale) || scale == 0) return(0)
@@ -39,35 +38,6 @@ normalize_probs <- function(x) {
   s <- sum(x)
   if (s <= 0) return(rep(1 / length(x), length(x)))
   x / s
-}
-
-add_migration_direction <- function(states_df, lat_threshold = 0.05, trend_lag = 6L) {
-  if (!all(c("ID", "ts", "lat") %in% names(states_df))) {
-    states_df$migration_direction <- "unknown"
-    return(states_df)
-  }
-
-  states_df |>
-    arrange(ID, ts) |>
-    group_by(ID) |>
-    mutate(
-      lat_trend = lat - lag(lat, n = trend_lag),
-      lat_trend = if_else(is.na(lat_trend), lat - lag(lat), lat_trend),
-      month_num = as.integer(format(ts, "%m")),
-      movement_direction = case_when(
-        is.finite(lat_trend) & lat_trend > lat_threshold ~ "northbound",
-        is.finite(lat_trend) & lat_trend < -lat_threshold ~ "southbound",
-        TRUE ~ "unknown"
-      ),
-      season_direction = case_when(
-        month_num %in% 3:6 ~ "northbound",
-        month_num %in% 7:11 ~ "southbound",
-        TRUE ~ "unknown"
-      ),
-      migration_direction = if_else(movement_direction != "unknown", movement_direction, season_direction)
-    ) |>
-    ungroup() |>
-    select(-lat_trend, -month_num, -movement_direction, -season_direction)
 }
 
 make_state_metadata <- function(states_df) {
@@ -88,15 +58,7 @@ make_state_metadata <- function(states_df) {
   ranked
 }
 
-build_empirical_transition <- function(states_df, alpha = 0.5, route_direction = "global") {
-  if (!"migration_direction" %in% names(states_df)) {
-    states_df <- add_migration_direction(states_df)
-  }
-  state_levels <- sort(unique(states_df$state[!is.na(states_df$state)]))
-  if (!identical(route_direction, "global")) {
-    states_df <- states_df |> filter(migration_direction == route_direction)
-  }
-
+build_empirical_transition <- function(states_df, alpha = 0.5) {
   df <- states_df |>
     filter(!is.na(state)) |>
     arrange(ID, ts) |>
@@ -105,6 +67,7 @@ build_empirical_transition <- function(states_df, alpha = 0.5, route_direction =
     ungroup() |>
     filter(!is.na(next_state))
 
+  state_levels <- sort(unique(states_df$state[!is.na(states_df$state)]))
   mat <- matrix(
     alpha,
     nrow = length(state_levels),
@@ -123,43 +86,6 @@ build_empirical_transition <- function(states_df, alpha = 0.5, route_direction =
   }
 
   sweep(mat, 1, rowSums(mat), "/")
-}
-
-build_directional_transitions <- function(states_df, alpha = 0.5) {
-  out <- lapply(migration_directions, function(direction) {
-    build_empirical_transition(states_df, alpha = alpha, route_direction = direction)
-  })
-  names(out) <- migration_directions
-  out
-}
-
-blend_transition_matrix <- function(global_mat, direction_mat, direction_n, min_n = 100, max_weight = 0.7) {
-  if (is.null(direction_mat) || !is.finite(direction_n) || direction_n <= 0) return(global_mat)
-  weight <- min(max_weight, direction_n / max(direction_n + min_n, 1))
-  out <- (1 - weight) * global_mat + weight * direction_mat
-  sweep(out, 1, rowSums(out), "/")
-}
-
-resolve_route_direction <- function(route_direction = "global") {
-  route_direction <- tolower(trimws(as.character(route_direction)[[1]]))
-  if (route_direction %in% c("north", "northward", "spring", "northbound")) return("northbound")
-  if (route_direction %in% c("south", "southward", "autumn", "fall", "southbound")) return("southbound")
-  if (route_direction %in% c("auto", "global", "all", "unknown")) return(route_direction)
-  stop("Unknown route_direction: ", route_direction)
-}
-
-route_transition_matrix <- function(context, route_direction = "global") {
-  route_direction <- resolve_route_direction(route_direction)
-  if (route_direction %in% c("global", "auto", "unknown")) return(context$transition$global)
-
-  n_by_direction <- context$direction_counts$n[match(route_direction, context$direction_counts$migration_direction)]
-  if (is.na(n_by_direction)) n_by_direction <- 0
-
-  blend_transition_matrix(
-    global_mat = context$transition$global,
-    direction_mat = context$transition[[route_direction]],
-    direction_n = n_by_direction
-  )
 }
 
 build_env_stats <- function(states_df) {
@@ -204,13 +130,9 @@ load_prediction_context <- function(save_context = FALSE) {
       state = as.integer(state)
     ) |>
     arrange(ID, ts)
-  states_df <- add_migration_direction(states_df)
 
   metadata <- make_state_metadata(states_df)
-  transition <- build_directional_transitions(states_df)
-  direction_counts <- states_df |>
-    count(migration_direction, name = "n") |>
-    arrange(migration_direction)
+  transition <- build_empirical_transition(states_df)
   env_stats <- build_env_stats(states_df)
 
   model_path <- file.path(paths$models_dir, paste0(cfg$project$species_code, "_hmm_best.rds"))
@@ -226,7 +148,6 @@ load_prediction_context <- function(save_context = FALSE) {
     states = states_df,
     metadata = metadata,
     transition = transition,
-    direction_counts = direction_counts,
     env_stats = env_stats,
     hmm_fit = hmm_fit,
     model_path = model_path
@@ -318,8 +239,7 @@ predict_flight_state <- function(
   ndvi = NA_real_,
   context = NULL,
   env_weight = 0.35,
-  prefer_hmm = TRUE,
-  route_direction = "global"
+  prefer_hmm = TRUE
 ) {
   if (is.null(context)) context <- load_prediction_context()
 
@@ -332,9 +252,8 @@ predict_flight_state <- function(
     ndvi = as.numeric(ndvi)
   )
 
-  route_direction <- resolve_route_direction(route_direction)
   hmm_probs <- NULL
-  if (isTRUE(prefer_hmm) && route_direction %in% c("global", "auto", "unknown")) {
+  if (isTRUE(prefer_hmm)) {
     hmm_probs <- try_hmm_transition(context, state_num, covariates)
   }
 
@@ -342,11 +261,10 @@ predict_flight_state <- function(
     probs <- hmm_probs
     source <- "moveHMM transition model"
   } else {
-    transition <- route_transition_matrix(context, route_direction)
-    base <- transition[as.character(state_num), state_keys]
+    base <- context$transition[as.character(state_num), state_keys]
     adj <- environment_adjustment(context, covariates, env_weight = env_weight)[state_keys]
     probs <- normalize_probs(as.numeric(base) * as.numeric(adj))
-    source <- paste("empirical transition + environment similarity", resolve_route_direction(route_direction), sep = " | ")
+    source <- "empirical transition + environment similarity"
   }
 
   tibble(
@@ -358,8 +276,7 @@ predict_flight_state <- function(
     temp_C = covariates$temp_C,
     wind_support = covariates$wind_support,
     wind_speed = covariates$wind_speed,
-    ndvi = covariates$ndvi,
-    route_direction = route_direction
+    ndvi = covariates$ndvi
   )
 }
 

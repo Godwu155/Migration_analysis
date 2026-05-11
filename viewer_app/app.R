@@ -13,7 +13,10 @@ tables_dir <- file.path(project_root, "output", "tables")
 trajectory_files <- list(
   trajectory = file.path(tables_dir, "14_trajectory_simulations.csv"),
   hourly_state = file.path(tables_dir, "14_trajectory_state_hourly.csv"),
-  endpoints = file.path(tables_dir, "14_trajectory_endpoints.csv")
+  endpoints = file.path(tables_dir, "14_trajectory_endpoints.csv"),
+  summary = file.path(tables_dir, "15_prediction_summary.csv"),
+  endpoint_uncertainty = file.path(tables_dir, "15_endpoint_uncertainty.csv"),
+  direction_comparison = file.path(tables_dir, "15_direction_comparison.csv")
 )
 
 read_states <- function() {
@@ -44,14 +47,24 @@ make_state_metadata <- function(states_df) {
 }
 
 read_cached_simulation <- function() {
-  needed <- unlist(trajectory_files, use.names = FALSE)
+  needed <- unlist(trajectory_files[c("trajectory", "hourly_state", "endpoints")], use.names = FALSE)
   if (!all(file.exists(needed))) return(NULL)
 
-  list(
+  out <- list(
     trajectory = read_csv(trajectory_files$trajectory, show_col_types = FALSE),
     hourly_state = read_csv(trajectory_files$hourly_state, show_col_types = FALSE),
     endpoints = read_csv(trajectory_files$endpoints, show_col_types = FALSE)
   )
+  if (file.exists(trajectory_files$summary)) {
+    out$summary <- read_csv(trajectory_files$summary, show_col_types = FALSE)
+  }
+  if (file.exists(trajectory_files$endpoint_uncertainty)) {
+    out$endpoint_uncertainty <- read_csv(trajectory_files$endpoint_uncertainty, show_col_types = FALSE)
+  }
+  if (file.exists(trajectory_files$direction_comparison)) {
+    out$direction_comparison <- read_csv(trajectory_files$direction_comparison, show_col_types = FALSE)
+  }
+  out
 }
 
 build_fallback_prediction <- function(states_df, metadata) {
@@ -112,7 +125,8 @@ if (!is.null(simulation)) {
   simulation$endpoints <- ensure_state_labels(simulation$endpoints, "final_state", "final_state_label")
 }
 
-missing_files <- names(trajectory_files)[!file.exists(unlist(trajectory_files))]
+required_trajectory_files <- trajectory_files[c("trajectory", "hourly_state", "endpoints")]
+missing_files <- names(required_trajectory_files)[!file.exists(unlist(required_trajectory_files))]
 existing_14 <- list.files(tables_dir, pattern = "^14_.*\\.csv$", full.names = FALSE)
 
 ui <- fluidPage(
@@ -181,6 +195,10 @@ server <- function(input, output, session) {
 
   output$mean_distance <- renderText({
     validate(need(!is.null(simulation), "No trajectory cache loaded"))
+    if ("summary" %in% names(simulation)) {
+      total <- simulation$summary |> filter(metric == "total_distance_km") |> slice(1)
+      return(paste0(round(total$mean[[1]], 1), " km"))
+    }
     paste0(round(mean(simulation$endpoints$total_distance_km, na.rm = TRUE), 1), " km")
   })
 
@@ -266,6 +284,13 @@ server <- function(input, output, session) {
 
   output$endpoint_table <- renderTable({
     validate(need(!is.null(simulation), "No trajectory cache loaded"))
+    if ("summary" %in% names(simulation)) {
+      return(
+        simulation$summary |>
+          mutate(across(where(is.numeric), ~ round(.x, 3))) |>
+          select(route_direction, metric, n_sims, mean, variance, sd, ci95_low, ci95_high, pi95_low, pi95_high)
+      )
+    }
     simulation$endpoints |>
       summarise(
         simulations = n(),

@@ -26,7 +26,10 @@ states_path <- file.path(project_root, "data", "processed", "curlew_states_decod
 cache_paths <- list(
   trajectory = file.path(tables_dir, "14_trajectory_simulations.csv"),
   hourly_state = file.path(tables_dir, "14_trajectory_state_hourly.csv"),
-  endpoints = file.path(tables_dir, "14_trajectory_endpoints.csv")
+  endpoints = file.path(tables_dir, "14_trajectory_endpoints.csv"),
+  summary = file.path(tables_dir, "15_prediction_summary.csv"),
+  endpoint_uncertainty = file.path(tables_dir, "15_endpoint_uncertainty.csv"),
+  direction_comparison = file.path(tables_dir, "15_direction_comparison.csv")
 )
 
 source(file.path(project_root, "R", "13_predict_flight_state.R"))
@@ -56,7 +59,8 @@ ensure_state_labels <- function(df, meta, state_col = "state", label_col = "stat
 }
 
 cache_ready <- function() {
-  all(file.exists(unlist(cache_paths, use.names = FALSE)))
+  required <- cache_paths[c("trajectory", "hourly_state", "endpoints")]
+  all(file.exists(unlist(required, use.names = FALSE)))
 }
 
 read_cache <- function() {
@@ -66,6 +70,15 @@ read_cache <- function() {
     hourly_state = read_csv(cache_paths$hourly_state, show_col_types = FALSE),
     endpoints = read_csv(cache_paths$endpoints, show_col_types = FALSE)
   )
+  if (file.exists(cache_paths$summary)) {
+    out$summary <- read_csv(cache_paths$summary, show_col_types = FALSE)
+  }
+  if (file.exists(cache_paths$endpoint_uncertainty)) {
+    out$endpoint_uncertainty <- read_csv(cache_paths$endpoint_uncertainty, show_col_types = FALSE)
+  }
+  if (file.exists(cache_paths$direction_comparison)) {
+    out$direction_comparison <- read_csv(cache_paths$direction_comparison, show_col_types = FALSE)
+  }
   out$trajectory <- ensure_state_labels(out$trajectory, meta, "state", "state_label")
   out$hourly_state <- ensure_state_labels(out$hourly_state, meta, "state", "state_label")
   out$endpoints <- ensure_state_labels(out$endpoints, meta, "final_state", "final_state_label")
@@ -311,6 +324,7 @@ ui <- fluidPage(
             numericInput("pred_wind_support", "Wind support", value = round(default_row$wind_support[[1]], 2), step = 0.1),
             numericInput("pred_wind_speed", "Wind speed", value = round(default_row$wind_speed[[1]], 2), step = 0.1),
             numericInput("pred_ndvi", "NDVI", value = if ("ndvi" %in% names(default_row)) round(default_row$ndvi[[1]], 3) else 0.5, step = 0.01, min = 0, max = 1),
+            selectInput("pred_route_direction", "Migration direction", choices = c("Global" = "global", "Northbound" = "northbound", "Southbound" = "southbound"), selected = "global"),
             sliderInput("pred_horizon", "Simulation horizon (hours)", min = 6, max = 72, value = 24, step = 6),
             sliderInput("pred_sims", "Number of simulated tracks", min = 20, max = 500, value = 100, step = 20),
             numericInput("pred_seed", "Random seed", value = 42, step = 1),
@@ -322,7 +336,7 @@ ui <- fluidPage(
           fluidRow(
             column(width = 4, div(class = "panel", div(class = "summary-label", "Most likely next state"), div(class = "summary-number", textOutput("pred_top_state", inline = TRUE)))),
             column(width = 4, div(class = "panel", div(class = "summary-label", "Mean total distance"), div(class = "summary-number", textOutput("pred_mean_distance", inline = TRUE)))),
-            column(width = 4, div(class = "panel", div(class = "summary-label", "Model source"), div(textOutput("pred_model_source", inline = TRUE))))
+            column(width = 4, div(class = "panel", div(class = "summary-label", "95% CI mean distance"), div(class = "summary-number", textOutput("pred_distance_ci", inline = TRUE))))
           ),
           fluidRow(
             column(width = 5, div(class = "panel", plotOutput("pred_prob_plot", height = "260px"))),
@@ -501,7 +515,8 @@ server <- function(input, output, session) {
         wind_support = input$pred_wind_support,
         wind_speed = input$pred_wind_speed,
         ndvi = input$pred_ndvi,
-        context = context_data()
+        context = context_data(),
+        route_direction = input$pred_route_direction
       )
       pred <- ensure_state_labels(pred, metadata(), "state", "state_label")
       prediction_data(pred)
@@ -518,7 +533,8 @@ server <- function(input, output, session) {
         horizon_hr = input$pred_horizon,
         n_sims = input$pred_sims,
         context = context_data(),
-        seed = input$pred_seed
+        seed = input$pred_seed,
+        route_direction = input$pred_route_direction
       )
       sim$trajectory <- ensure_state_labels(sim$trajectory, metadata(), "state", "state_label")
       sim$hourly_state <- ensure_state_labels(sim$hourly_state, metadata(), "state", "state_label")
@@ -547,7 +563,18 @@ server <- function(input, output, session) {
 
   output$pred_mean_distance <- renderText({
     validate(need(!is.null(simulation_data()), "Click Predict and simulate"))
+    if ("summary" %in% names(simulation_data())) {
+      total <- simulation_data()$summary |> filter(metric == "total_distance_km") |> slice(1)
+      return(paste0(round(total$mean[[1]], 1), " km"))
+    }
     paste0(round(mean(simulation_data()$endpoints$total_distance_km, na.rm = TRUE), 1), " km")
+  })
+
+  output$pred_distance_ci <- renderText({
+    validate(need(!is.null(simulation_data()), "Click Predict and simulate"))
+    validate(need("summary" %in% names(simulation_data()), "Run a new prediction"))
+    total <- simulation_data()$summary |> filter(metric == "total_distance_km") |> slice(1)
+    paste0(round(total$ci95_low[[1]], 1), "-", round(total$ci95_high[[1]], 1), " km")
   })
 
   output$pred_prob_plot <- renderPlot({
@@ -609,6 +636,13 @@ server <- function(input, output, session) {
 
   output$pred_endpoint_table <- renderTable({
     validate(need(!is.null(simulation_data()), "Click Predict and simulate"))
+    if ("summary" %in% names(simulation_data())) {
+      return(
+        simulation_data()$summary |>
+          mutate(across(where(is.numeric), ~ round(.x, 3))) |>
+          select(route_direction, metric, n_sims, mean, variance, sd, ci95_low, ci95_high, pi95_low, pi95_high)
+      )
+    }
     simulation_data()$endpoints |>
       summarise(
         simulations = n(),

@@ -47,6 +47,12 @@ ui <- fluidPage(
         numericInput("wind_support", "Wind support", value = round(example_row$wind_support[[1]], 2), step = 0.1),
         numericInput("wind_speed", "Wind speed", value = round(example_row$wind_speed[[1]], 2), step = 0.1),
         numericInput("ndvi", "NDVI", value = if ("ndvi" %in% names(example_row)) round(example_row$ndvi[[1]], 3) else 0.5, step = 0.01, min = 0, max = 1),
+        selectInput(
+          "route_direction",
+          "Migration direction",
+          choices = c("Global" = "global", "Northbound" = "northbound", "Southbound" = "southbound"),
+          selected = "global"
+        ),
         sliderInput("horizon", "Simulation horizon (hours)", min = 6, max = 72, value = 24, step = 6),
         sliderInput("n_sims", "Number of simulated tracks", min = 20, max = 500, value = 100, step = 20),
         numericInput("seed", "Random seed", value = 42, step = 1),
@@ -62,7 +68,7 @@ ui <- fluidPage(
       fluidRow(
         column(width = 4, div(class = "panel", div(class = "summary-label", "Most likely next state"), div(class = "summary-number", textOutput("top_state", inline = TRUE)))),
         column(width = 4, div(class = "panel", div(class = "summary-label", "Mean total distance"), div(class = "summary-number", textOutput("mean_distance", inline = TRUE)))),
-        column(width = 4, div(class = "panel", div(class = "summary-label", "Model source"), div(textOutput("model_source", inline = TRUE))))
+        column(width = 4, div(class = "panel", div(class = "summary-label", "95% CI mean distance"), div(class = "summary-number", textOutput("distance_ci", inline = TRUE))))
       ),
       fluidRow(
         column(width = 5, div(class = "panel", plotOutput("state_prob_plot", height = "260px"))),
@@ -88,7 +94,8 @@ server <- function(input, output, session) {
           wind_support = input$wind_support,
           wind_speed = input$wind_speed,
           ndvi = input$ndvi,
-          context = context
+          context = context,
+          route_direction = input$route_direction
         )
       )
 
@@ -105,7 +112,8 @@ server <- function(input, output, session) {
           horizon_hr = input$horizon,
           n_sims = input$n_sims,
           context = context,
-          seed = input$seed
+          seed = input$seed,
+          route_direction = input$route_direction
         )
       )
     })
@@ -124,7 +132,14 @@ server <- function(input, output, session) {
 
   output$mean_distance <- renderText({
     validate(need(!is.null(simulation()), "Click Predict and simulate"))
-    paste0(round(mean(simulation()$endpoints$total_distance_km, na.rm = TRUE), 1), " km")
+    total <- simulation()$summary |> filter(metric == "total_distance_km") |> slice(1)
+    paste0(round(total$mean[[1]], 1), " km")
+  })
+
+  output$distance_ci <- renderText({
+    validate(need(!is.null(simulation()), "Click Predict and simulate"))
+    total <- simulation()$summary |> filter(metric == "total_distance_km") |> slice(1)
+    paste0(round(total$ci95_low[[1]], 1), "-", round(total$ci95_high[[1]], 1), " km")
   })
 
   output$state_prob_plot <- renderPlot({
@@ -208,14 +223,9 @@ server <- function(input, output, session) {
 
   output$endpoint_table <- renderTable({
     validate(need(!is.null(simulation()), "Click Predict and simulate"))
-    simulation()$endpoints |>
-      summarise(
-        simulations = n(),
-        mean_endpoint_lon = round(mean(endpoint_lon, na.rm = TRUE), 4),
-        mean_endpoint_lat = round(mean(endpoint_lat, na.rm = TRUE), 4),
-        mean_total_distance_km = round(mean(total_distance_km, na.rm = TRUE), 1),
-        median_total_distance_km = round(median(total_distance_km, na.rm = TRUE), 1)
-      )
+    simulation()$summary |>
+      mutate(across(where(is.numeric), ~ round(.x, 3))) |>
+      select(route_direction, metric, n_sims, mean, variance, sd, ci95_low, ci95_high, pi95_low, pi95_high)
   })
 }
 

@@ -29,7 +29,10 @@ states_path <- file.path(project_root, "data", "processed", "curlew_states_decod
 trajectory_files <- list(
   trajectory = file.path(tables_dir, "14_trajectory_simulations.csv"),
   hourly_state = file.path(tables_dir, "14_trajectory_state_hourly.csv"),
-  endpoints = file.path(tables_dir, "14_trajectory_endpoints.csv")
+  endpoints = file.path(tables_dir, "14_trajectory_endpoints.csv"),
+  summary = file.path(tables_dir, "15_prediction_summary.csv"),
+  endpoint_uncertainty = file.path(tables_dir, "15_endpoint_uncertainty.csv"),
+  direction_comparison = file.path(tables_dir, "15_direction_comparison.csv")
 )
 
 state_palette <- c(
@@ -87,7 +90,7 @@ read_states <- function() {
 }
 
 read_prediction_cache <- function(meta) {
-  needed <- unlist(trajectory_files, use.names = FALSE)
+  needed <- unlist(trajectory_files[c("trajectory", "hourly_state", "endpoints")], use.names = FALSE)
   if (!all(file.exists(needed))) return(NULL)
 
   out <- list(
@@ -95,6 +98,16 @@ read_prediction_cache <- function(meta) {
     hourly_state = read_csv(trajectory_files$hourly_state, show_col_types = FALSE),
     endpoints = read_csv(trajectory_files$endpoints, show_col_types = FALSE)
   )
+
+  if (file.exists(trajectory_files$summary)) {
+    out$summary <- read_csv(trajectory_files$summary, show_col_types = FALSE)
+  }
+  if (file.exists(trajectory_files$endpoint_uncertainty)) {
+    out$endpoint_uncertainty <- read_csv(trajectory_files$endpoint_uncertainty, show_col_types = FALSE)
+  }
+  if (file.exists(trajectory_files$direction_comparison)) {
+    out$direction_comparison <- read_csv(trajectory_files$direction_comparison, show_col_types = FALSE)
+  }
 
   out$trajectory <- ensure_state_labels(out$trajectory, meta, "state", "state_label")
   out$hourly_state <- ensure_state_labels(out$hourly_state, meta, "state", "state_label")
@@ -335,13 +348,24 @@ server <- function(input, output, session) {
 
   output$mean_distance <- renderText({
     if (is.null(prediction_cache)) return("NA")
+    if ("summary" %in% names(prediction_cache)) {
+      total <- prediction_cache$summary |> filter(metric == "total_distance_km") |> slice(1)
+      return(paste0(round(total$mean[[1]], 1), " km"))
+    }
     paste0(round(mean(prediction_cache$endpoints$total_distance_km, na.rm = TRUE), 1), " km")
   })
 
   output$cache_files <- renderText({
+    required <- c("trajectory", "hourly_state", "endpoints")
+    optional <- setdiff(names(trajectory_files), required)
     found <- names(trajectory_files)[file.exists(unlist(trajectory_files))]
-    missing <- names(trajectory_files)[!file.exists(unlist(trajectory_files))]
-    paste("Found:", paste(found, collapse = ", "), "| Missing:", paste(missing, collapse = ", "))
+    missing_required <- required[!file.exists(unlist(trajectory_files[required]))]
+    missing_optional <- optional[!file.exists(unlist(trajectory_files[optional]))]
+    paste(
+      "Found:", paste(found, collapse = ", "),
+      "| Missing required:", paste(missing_required, collapse = ", "),
+      "| Missing optional:", paste(missing_optional, collapse = ", ")
+    )
   })
 
   output$final_state_plot <- renderPlot({
@@ -401,6 +425,13 @@ server <- function(input, output, session) {
 
   output$pred_endpoint_table <- renderTable({
     if (is.null(prediction_cache)) return(tibble(note = "No prediction cache."))
+    if ("summary" %in% names(prediction_cache)) {
+      return(
+        prediction_cache$summary |>
+          mutate(across(where(is.numeric), ~ round(.x, 3))) |>
+          select(route_direction, metric, n_sims, mean, variance, sd, ci95_low, ci95_high, pi95_low, pi95_high)
+      )
+    }
     prediction_cache$endpoints |>
       summarise(
         simulations = n(),
