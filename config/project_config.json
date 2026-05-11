@@ -1,0 +1,31 @@
+{
+  "project": {
+    "species_code": "curlew",
+    "species_name": "Numenius arquata",
+    "timezone": "UTC"
+  },
+  "cleaning": {
+    "speed_max_ms": 35,
+    "min_points_per_id": 50
+  },
+  "regularize": {
+    "rate_hours": 1,
+    "tolerance_minutes": 20
+  },
+  "hmm": {
+    "min_burst_n": 10,
+    "max_step_km": 120,
+    "candidate_states": [
+      2,
+      3,
+      4
+    ]
+  },
+  "stopover": {
+    "eps_km": 10,
+    "min_samples": 3,
+    "max_gap_hr": 12,
+    "min_duration_hr": 1,
+    "max_duration_hr": 720
+  }
+}

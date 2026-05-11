@@ -1,0 +1,56 @@
+# IDE and editor state
+.idea/
+.Rproj.user/
+.vscode/
+*.swp
+*.swo
+
+# OS metadata
+.DS_Store
+Thumbs.db
+
+# R session state and temporary files
+.RData
+.RData*
+.Rhistory
+.Rapp.history
+
+# Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Node dependencies and generated presentation artifacts
+node_modules/
+presentation_work/node_modules/
+presentation_work/output/
+presentation_work/scratch/
+
+# Large research data and generated outputs
+data/
+output/
+Download/
+old/
+*.csv
+*.tsv
+*.rds
+*.Rds
+*.nc
+*.zip
+
+# Generated reports and build artifacts
+paper/Untitled-1.txt
+*.aux
+*.log
+*.out
+*.synctex*
+*.toc
+*.bbl
+*.blg
+*.fls
+*.fdb_latexmk
+*.pdf
+*.pptx
+~$*
