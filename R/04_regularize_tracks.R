@@ -120,9 +120,35 @@ if (length(skipped_ids) > 0) {
 
 df_reg <- bind_rows(df_reg_list)
 
+# Normalize amt output columns for downstream Python/R scripts.
+# Some amt versions return x_/y_/t_/burst_; downstream scripts expect
+# id/ts/lon/lat/burst_id.
+if (!"lon" %in% names(df_reg) && "x_" %in% names(df_reg)) {
+  df_reg <- df_reg %>% mutate(lon = x_)
+}
+if (!"lat" %in% names(df_reg) && "y_" %in% names(df_reg)) {
+  df_reg <- df_reg %>% mutate(lat = y_)
+}
+if (!"ts" %in% names(df_reg) && "t_" %in% names(df_reg)) {
+  df_reg <- df_reg %>% mutate(ts = t_)
+}
+if (!"burst_id" %in% names(df_reg) && "burst_" %in% names(df_reg)) {
+  df_reg <- df_reg %>% mutate(burst_id = burst_)
+}
+
+required_out_cols <- c("id", "ts", "lon", "lat")
+missing_out_cols <- setdiff(required_out_cols, names(df_reg))
+if (length(missing_out_cols) > 0) {
+  stop("规则化输出缺少必要列: ", paste(missing_out_cols, collapse = ", "))
+}
+
+df_reg <- df_reg %>%
+  select(id, ts, lon, lat, any_of("burst_id"), everything()) %>%
+  select(-any_of(c("x_", "y_", "t_", "burst_")))
+
 # ===== 结果检查 =====
 # amt 输出通常有 t_ 列；如果没有，就退回 ts
-time_col <- if ("t_" %in% names(df_reg)) "t_" else "ts"
+time_col <- "ts"
 
 check_tbl <- df_reg %>%
   group_by(id) %>%

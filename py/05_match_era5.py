@@ -43,6 +43,33 @@ def calc_bearing(lat1, lon1, lat2, lon2):
     return (bearing + 360.0) % 360.0
 
 
+def normalize_gps_columns(gps: pd.DataFrame, gps_path: Path) -> pd.DataFrame:
+    """Accept both project-standard columns and raw amt output columns."""
+    rename_map = {}
+    if "ts" not in gps.columns and "t_" in gps.columns:
+        rename_map["t_"] = "ts"
+    if "lon" not in gps.columns and "x_" in gps.columns:
+        rename_map["x_"] = "lon"
+    if "lat" not in gps.columns and "y_" in gps.columns:
+        rename_map["y_"] = "lat"
+    if "burst_id" not in gps.columns and "burst_" in gps.columns:
+        rename_map["burst_"] = "burst_id"
+
+    if rename_map:
+        gps = gps.rename(columns=rename_map)
+
+    required = ["id", "ts", "lon", "lat"]
+    missing = [col for col in required if col not in gps.columns]
+    if missing:
+        raise KeyError(
+            f"{gps_path} 缺少必要列: {', '.join(missing)}. "
+            f"当前列名: {', '.join(map(str, gps.columns))}. "
+            "请先运行 R/04_regularize_tracks.R，或确认规则化文件包含 id/ts/lon/lat。"
+        )
+
+    return gps
+
+
 def chunked_extract(ds: xr.Dataset, gps: pd.DataFrame, time_name: str, lat_name: str, lon_name: str,
                     temp_var: str, u_var: str, v_var: str, chunk_size: int = 5000) -> pd.DataFrame:
     temps: List[np.ndarray] = []
@@ -93,6 +120,7 @@ def main() -> None:
 
     print("读取 GPS 数据...")
     gps = pd.read_csv(gps_path)
+    gps = normalize_gps_columns(gps, gps_path)
     gps["ts"] = pd.to_datetime(gps["ts"], utc=True).dt.tz_localize(None)
 
     print("读取 ERA5 NetCDF...")
